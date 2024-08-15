@@ -18,7 +18,7 @@ def check_music_end():
 pygame.init()
 SONG_END = pygame.USEREVENT+1
 root = Tk()
-root.title('Hauntify')
+root.title('Hauntify Pre-Release Testing Version 0.0.0.11')
 root.geometry('720x500')
 path = ""
 pygame.mixer.init()
@@ -167,11 +167,11 @@ songlist.pack()
 # load_music()
 
 
-play_btn_image =     PhotoImage(file="play.png")
-pause_btn_image =    PhotoImage(file="pause.png")
-shuffle_btn_image =  PhotoImage(file="shuffle.png")
-skip_btn_image =     PhotoImage(file="skip.png")
-back_btn_image =     PhotoImage(file="back.png")
+play_btn_image =     PhotoImage(file="./icons/play.png")
+pause_btn_image =    PhotoImage(file="./icons/pause.png")
+shuffle_btn_image =  PhotoImage(file="./icons/shuffle.png")
+skip_btn_image =     PhotoImage(file="./icons/skip.png")
+back_btn_image =     PhotoImage(file="./icons/back.png")
 
 control_frame = Frame(root)
 control_frame.pack()
