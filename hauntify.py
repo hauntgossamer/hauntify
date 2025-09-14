@@ -20,11 +20,13 @@ SONG_END = pygame.USEREVENT+1
 root = Tk()
 root.title('Hauntify Pre-Release Testing Version 0.0.0.11')
 root.geometry('720x500')
+root.iconbitmap('./icons/logo.ico')
 path = ""
 pygame.mixer.init()
 
-menubar = Menu(root)
-root.config(menu=menubar)
+# The Menu widget now has its own background and foreground color
+menubar = Menu(root, bg="#1a0129", fg="#ffffff")
+root.config(menu=menubar, bg="#1a0129")
 dicts = []
 songs = []
 current_song = ""
@@ -32,6 +34,8 @@ paused = False
 picked_music = False
 click_pick_music = True
 shuffling = False
+# Define a custom border color to use throughout the app
+border_color = '#5A4286'
 
 # testlist = [f"test song {i}" for i in range(1, 27)]
 def shuffle(x):
@@ -48,7 +52,7 @@ def shuffle(x):
     new_list_of_dicts = []
     for i in new_indexes:
         new_list_of_dicts.append(dict(key=i, value=x[i]))
-#     print(new_list_of_dicts)
+#     print(new_list_ofdicts)
     shuffled_list = [i["value"] for i in new_list_of_dicts]
 #     print(f"Provided list looked like this: \n {x} \n \n Shuffled list looks like this: \n {shuffled_list} \n")
     return shuffled_list
@@ -159,35 +163,97 @@ def shuffle_music():
         load_music()
         # print(f"Shuffled songs look like this: \n \n {songs}")
 
-organize_menu = Menu(menubar, tearoff=False)
+# The submenu also needs its own color
+organize_menu = Menu(menubar, tearoff=False, bg="#1a0129", fg="#ffffff")
 organize_menu.add_command(label='Select Folder',command=lambda:[clicked_pick_music(), load_music()])
 menubar.add_cascade(label="Add Songs", menu=organize_menu) 
-songlist = Listbox(root, bg="black", fg="white", width=300, height=20)
+
+# Updated Listbox with flat borders
+songlist = Listbox(
+    root,
+    bg="black",
+    fg="#ffffff", # Changed text color to white for better visibility
+    width=300,
+    height=20,
+    relief=FLAT,
+    bd=0,
+    highlightthickness=2, # Creates a 2px border
+    highlightbackground=border_color # The color of the border
+)
 songlist.pack()
-# load_music()
 
-
-play_btn_image =     PhotoImage(file="./icons/play.png")
-pause_btn_image =    PhotoImage(file="./icons/pause.png")
-shuffle_btn_image =  PhotoImage(file="./icons/shuffle.png")
-skip_btn_image =     PhotoImage(file="./icons/skip.png")
-back_btn_image =     PhotoImage(file="./icons/back.png")
-
-control_frame = Frame(root)
+# Updated control frame with flat borders
+control_frame = Frame(
+    root,
+    bg=root['bg'],
+    relief=FLAT,
+    bd=0
+)
 control_frame.pack()
 
-play_btn = Button(control_frame,    image = play_btn_image,    borderwidth=5, bg="white", command=play_music)
-shuffle_btn = Button(control_frame, image = shuffle_btn_image, borderwidth=5, bg="white", command=shuffle_music)
-skip_btn = Button(control_frame,    image = skip_btn_image,    borderwidth=5, bg="white", command=skip_music)
-back_btn = Button(control_frame,    image = back_btn_image,    borderwidth=5, bg="white", command=back_music)
-pause_btn = Button(control_frame,   image = pause_btn_image,   borderwidth=5, bg="white", command=pause_music)
+play_btn_image =    PhotoImage(file="./icons/play.png")
+pause_btn_image =   PhotoImage(file="./icons/pause.png")
+shuffle_btn_image = PhotoImage(file="./icons/shuffle.png")
+skip_btn_image =    PhotoImage(file="./icons/skip.png")
+back_btn_image =    PhotoImage(file="./icons/back.png")
 
+# Updated button definitions with flat borders and custom color
+play_btn = Button(
+    control_frame,
+    image=play_btn_image,
+    bg="#1a0129",
+    relief=FLAT,
+    bd=0,
+    highlightthickness=2,
+    highlightbackground=border_color,
+    command=play_music
+)
+shuffle_btn = Button(
+    control_frame,
+    image=shuffle_btn_image,
+    bg="#1a0129",
+    relief=FLAT,
+    bd=0,
+    highlightthickness=2,
+    highlightbackground=border_color,
+    command=shuffle_music
+)
+skip_btn = Button(
+    control_frame,
+    image=skip_btn_image,
+    bg="#1a0129",
+    relief=FLAT,
+    bd=0,
+    highlightthickness=2,
+    highlightbackground=border_color,
+    command=skip_music
+)
+back_btn = Button(
+    control_frame,
+    image=back_btn_image,
+    bg="#1a0129",
+    relief=FLAT,
+    bd=0,
+    highlightthickness=2,
+    highlightbackground=border_color,
+    command=back_music
+)
+pause_btn = Button(
+    control_frame,
+    image=pause_btn_image,
+    bg="#1a0129",
+    relief=FLAT,
+    bd=0,
+    highlightthickness=2,
+    highlightbackground=border_color,
+    command=pause_music
+)
 
 play_btn.grid(row=0, column=0, padx=7, pady=2)
-shuffle_btn.grid(row=0, column=4, padx=7, pady=2)
-skip_btn.grid(row=0, column=3, padx=7, pady=2)
+pause_btn.grid(row=0, column=1, padx=7, pady=2) # Moved the pause button to match your screenshot
 back_btn.grid(row=0, column=2, padx=7, pady=2)
-pause_btn.grid(row=0, column=1, padx=7, pady=2)
+skip_btn.grid(row=0, column=3, padx=7, pady=2)
+shuffle_btn.grid(row=0, column=4, padx=7, pady=2)
 
 check_music_end()
 root.mainloop()
