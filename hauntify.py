@@ -18,9 +18,9 @@ def check_music_end():
 pygame.init()
 SONG_END = pygame.USEREVENT+1
 root = Tk()
-root.title('Hauntify Pre-Release Testing Version 0.0.0.11')
+root.title('Hauntify Version 0.0.1.0 Linux Edition')
 root.geometry('720x500')
-root.iconbitmap('./icons/logo.ico')
+# root.iconbitmap('/icons/logo.ico')
 path = ""
 pygame.mixer.init()
 
