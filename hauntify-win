@@ -4,21 +4,123 @@ from tkinter import *
 import pygame
 import os
 import sys
-import random,time
+import random, time
 from time import sleep
 from io import BytesIO
 from mutagen.mp3 import MP3
 from mutagen.oggvorbis import OggVorbis
 from PIL import Image, ImageTk, ImageDraw, ImageFont, ImageColor
 import threading
+import tkinter.font as tkfont
 
-# Define a custom border color to use throughout the app
+# Import necessary Windows SDK libraries for lock screen integration
+# This requires `pip install winsdk`
+try:
+    import winsdk.windows.media.playback as media_playback
+    import winsdk.windows.media as windows_media
+    from winsdk.windows.storage.streams import RandomAccessStreamReference
+    # We will need to use a thread for Windows API calls as they are async
+    # and to prevent blocking the main GUI thread.
+    is_windows_media_session_supported = True
+except ImportError:
+    is_windows_media_session_supported = False
+    print("winsdk not found. Lock screen controls will not be available.")
+    print("Please install with: pip install winsdk")
+
+# --- Global Variables and Constants ---
 border_color = '#111144'
-# Global variable to hold the resize job ID for debouncing
 resize_job = None
 widgets_to_update = []
 original_album_art_img = None 
+pygame.init()
+SONG_END = pygame.USEREVENT + 1
+root = Tk()
+root.title('Hauntify Music Player (Windows Edition)')
+root.resizable(True, True)
 
+path = ""
+pygame.mixer.init()
+dicts = []
+songs = []
+current_song = ""
+paused = False
+picked_music = False
+shuffling = False
+current_song_length = 0
+
+# --- Media Session Setup for Windows Lock Screen ---
+media_manager = None
+if is_windows_media_session_supported:
+    def setup_media_session():
+        """
+        Initializes the Windows Media Session and sets up command handlers.
+        """
+        global media_manager
+        media_manager = media_playback.MediaPlaybackCommandManager.get_current()
+        media_manager.is_enabled = True
+        
+        # Enable all the commands we want to handle
+        media_manager.play_command_requested.add(on_play_command)
+        media_manager.pause_command_requested.add(on_pause_command)
+        media_manager.next_command_requested.add(on_next_command)
+        media_manager.previous_command_requested.add(on_previous_command)
+
+    def update_media_session_metadata(metadata_dict, album_art_image=None):
+        """
+        Updates the song metadata and album art for the Windows Media Session.
+        This must be run on a separate thread to avoid blocking the GUI.
+        """
+        if not is_windows_media_session_supported:
+            return
+
+        def run_update():
+            media_properties = media_manager.playback_info.playback_info.display_properties
+            media_properties.title = metadata_dict.get('title', "Unknown Title")
+            media_properties.artist = metadata_dict.get('artist', "Unknown Artist")
+            media_properties.album_title = metadata_dict.get('album', "Unknown Album")
+            media_properties.type = windows_media.MediaPlaybackType.MUSIC
+            
+            # Update album art
+            if album_art_image:
+                try:
+                    bio = BytesIO()
+                    # The format needs to be PNG for the Windows API
+                    album_art_image.save(bio, format='PNG')
+                    bio.seek(0)
+                    media_properties.thumbnail = RandomAccessStreamReference.create_from_stream(bio)
+                except Exception as e:
+                    print(f"Failed to update album art for media session: {e}")
+            else:
+                media_properties.thumbnail = None
+
+            # Finalize the update
+            media_manager.playback_info.playback_info.display_properties = media_properties
+            media_manager.playback_info.playback_info.is_playing = pygame.mixer.music.get_busy()
+        
+        # Start the update in a new thread
+        threading.Thread(target=run_update).start()
+    
+    # Define command handlers for lock screen controls
+    def on_play_command(sender, args):
+        args.handled = True
+        root.after(0, play_music)
+    
+    def on_pause_command(sender, args):
+        args.handled = True
+        root.after(0, pause_music)
+    
+    def on_next_command(sender, args):
+        args.handled = True
+        root.after(0, skip_music)
+
+    def on_previous_command(sender, args):
+        args.handled = True
+        root.after(0, back_music)
+    
+    # Initialize the media session on a separate thread to prevent blocking
+    threading.Thread(target=setup_media_session).start()
+
+# --- Utility Functions ---
 def set_volume(val):
     """ Sets the volume of the music mixer. """
     volume = int(val) / 100
@@ -30,8 +132,6 @@ def update_song_progress():
     if pygame.mixer.music.get_busy() and current_song_length > 0:
         elapsed_time = pygame.mixer.music.get_pos() / 1000
         progress_bar.set(elapsed_time)
-        
-        # Format the time
         minutes = int(elapsed_time // 60)
         seconds = int(elapsed_time % 60)
         formatted_time = f"{minutes:02}:{seconds:02}"
@@ -41,7 +141,6 @@ def update_song_progress():
 
 def check_music_end():
     """ Checks for the end of the song and handles playback. """
-    global current_song, shuffling, current_song_length
     for event in pygame.event.get():
         if event.type == SONG_END:
             skip_music()
@@ -101,23 +200,15 @@ def get_metadata(full_path):
 def update_ui():
     """
     Applies the new font sizes and resizes album art to all widgets after a resize event.
-    This function is now called only once the resize is complete.
     """
-    global current_song, original_album_art_img
+    global original_album_art_img
     new_width = root.winfo_width()
     new_height = root.winfo_height()
     
-    # Calculate font size
     new_base_font_size = max(8, min(14, int(new_width / 80)))
-    
-    # Calculate album art size (based on the smaller of width or height)
-    # The new size is a percentage of the smaller window dimension.
     new_album_art_size = int(min(new_width, new_height) * 0.5)
-    
-    # Clamp the size to be within a reasonable range
     new_album_art_size = max(100, new_album_art_size)
     
-    # Update fonts for all widgets
     for font_name in fonts:
         if font_name == 'title':
             fonts[font_name].configure(size=int(new_base_font_size * 1.4))
@@ -126,29 +217,25 @@ def update_ui():
         else:
             fonts[font_name].configure(size=new_base_font_size)
     
-    # First, apply the font to all other widgets
     for widget, font_type in widgets_to_update:
         if widget != songlist:
             widget.config(font=fonts[font_type])
 
-    # Now, handle the Listbox separately and aggressively
     current_selection_index = -1
     try:
         current_selection_index = songlist.curselection()[0]
     except IndexError:
-        pass # No selection
+        pass
     
     songlist.delete(0, 'end')
     for d in dicts:
         songlist.insert("end", d["display"])
-
     songlist.config(font=fonts['normal'])
 
     if current_selection_index != -1 and current_selection_index < songlist.size():
         songlist.selection_set(current_selection_index)
-        songlist.see(current_selection_index) # Ensure the selection is visible
+        songlist.see(current_selection_index)
 
-    # Resize and update the album art
     if original_album_art_img:
         resized_image = original_album_art_img.resize((new_album_art_size, new_album_art_size), Image.LANCZOS)
         new_photo_image = ImageTk.PhotoImage(resized_image)
@@ -163,64 +250,12 @@ def update_ui():
 def on_resize_event(event):
     """Schedules a UI update with a debounce to prevent flickering and lag."""
     global resize_job
-    # Cancel any previous scheduled jobs
     if resize_job:
         root.after_cancel(resize_job)
-    # Schedule a new job to run after a short delay
     resize_job = root.after(100, update_ui)
 
-pygame.init()
-SONG_END = pygame.USEREVENT+1
-root = Tk()
-root.title('Hauntify Music Player (Windows Edition)')
-root.resizable(True, True)
-
-path = ""
-pygame.mixer.init()
-dicts = []
-songs = []
-current_song = ""
-paused = False
-picked_music = False
-shuffling = False
-current_song_length = 0
-original_album_art_img = None 
-
-# Create a placeholder album art image for files with no embedded art.
-placeholder_img = Image.new('RGB', (300, 300), color='#1a0129')
-draw = ImageDraw.Draw(placeholder_img)
-draw.rectangle([10, 10, 290, 290], outline="#ffffff", width=2)
-
-try:
-    text_font = ImageFont.truetype("Arial", 80)
-except IOError:
-    try:
-        text_font = ImageFont.truetype("DejaVuSans", 80)
-    except IOError:
-        text_font = ImageFont.load_default()
-
-text_to_draw = "🎶"
-bbox = draw.textbbox((0, 0), text_to_draw, font=text_font)
-text_width = bbox[2] - bbox[0]
-text_height = bbox[3] - bbox[1]
-text_x = (300 - text_width) / 2
-text_y = (300 - text_height) / 2
-draw.text((text_x, text_y), text_to_draw, fill="#ffffff", font=text_font)
-
-global placeholder_album_art
-placeholder_album_art = ImageTk.PhotoImage(placeholder_img)
-
-# Get the path to the executable's directory for a consistent config file location
-if getattr(sys, 'frozen', False):
-    application_path = os.path.dirname(sys.executable)
-else:
-    application_path = os.path.dirname(os.path.abspath(__file__))
-
-# Use the application path to define the config file path
-config_file_path = os.path.join(application_path, ".last_dir.txt")
-
 def shuffle(x):
-    """ This is the custom shuffle method. It sorts a list based on a randomly generated key for each item. """
+    """ Shuffles a list using a custom algorithm. """
     shuffled_with_keys = [
         {"original": item, "sort_key": random.randint(0, 1000)}
         for item in x
@@ -251,10 +286,8 @@ def load_songs_from_path(folder_path):
                 songs.append(f)
                 dicts.append(dict(key=f, value=full_path, display=display_name))
                 
-    # Sort the dictionary list by display name
     dicts.sort(key=lambda d: d["display"].lower())
     
-    # Clear and repopulate the listbox and songs list in the correct order
     songlist.delete(0, "end")
     songs.clear()
     for d in dicts:
@@ -268,130 +301,131 @@ def load_songs_from_path(folder_path):
 
 def open_folder_dialog():
     """Opens a file dialog for the user to select a folder."""
-    global config_file_path
-    
-    # Check for and read the last saved directory
-    initial_dir = None
-    if os.path.exists(config_file_path):
-        with open(config_file_path, "r") as f:
+    if os.path.exists(".last_dir.txt"):
+        with open(".last_dir.txt", "r") as f:
             initial_dir = f.read().strip()
+    else:
+        initial_dir = None
     
     path = filedialog.askdirectory(initialdir=initial_dir)
     
-    # If a path is selected, save it and load the music
     if path:
-        with open(config_file_path, "w") as f:
+        with open(".last_dir.txt", "w") as f:
             f.write(path)
         load_songs_from_path(path)
 
-global resized_album_art_image
-
 def play_music():
-    """
-    Loads and plays the selected music file. This function is called
-    when a song is selected or playback is unpaused.
-    """
+    """ Loads and plays the selected music file. """
     global current_song, paused, current_song_length, original_album_art_img
-    if not paused:
+    
+    # If the music is already paused, just unpause it
+    if paused:
+        pygame.mixer.music.unpause()
+        paused = False
+        if is_windows_media_session_supported:
+            media_manager.playback_info.playback_info.is_playing = True
+        return
         
-        # Find the dictionary entry for the current song
-        song_entry = [i for i in dicts if i["key"] == current_song][0]
-        full_path = song_entry["value"]
-        
-        # Use the helper function to get all metadata at once
-        metadata = get_metadata(full_path)
-        
-        # Load the song in the mixer
+    # Find the dictionary entry for the current song
+    try:
+        song_entry = next(i for i in dicts if i["key"] == current_song)
+    except StopIteration:
+        print("Error: Selected song not found in playlist.")
+        return
+
+    full_path = song_entry["value"]
+    
+    # Use the helper function to get all metadata at once
+    metadata = get_metadata(full_path)
+    
+    # Load the song in the mixer
+    try:
         pygame.mixer.music.load(full_path)
         pygame.mixer.music.play()
         pygame.mixer.music.set_endevent(SONG_END)
-        songlist.selection_clear(0, "end")
-        songlist.selection_set(songs.index(current_song))
-        
-        # Update UI with the retrieved metadata
-        song_title_label.config(text=metadata['title'])
-        artist_label.config(text=metadata['artist'])
-        album_label.config(text=metadata['album'])
-        year_label.config(text=metadata['year'])
-        
-        current_song_length = metadata['length']
-        progress_bar.config(to=current_song_length)
-        
-        minutes = int(current_song_length // 60)
-        seconds = int(current_song_length % 60)
-        total_time_label.config(text=f"{minutes:02}:{seconds:02}")
-        
-        # Handle album art
-        if metadata['album_art']:
-            original_album_art_img = metadata['album_art'].copy()
-        else:
-            original_album_art_img = placeholder_img.copy()
-            
-        # Call the UI update function to resize the art for initial display
-        update_ui()
-            
+    except pygame.error as e:
+        print(f"Error loading or playing music file: {e}")
+        return
+
+    songlist.selection_clear(0, "end")
+    songlist.selection_set(songs.index(current_song))
+    
+    # Update UI with the retrieved metadata
+    song_title_label.config(text=metadata['title'])
+    artist_label.config(text=metadata['artist'])
+    album_label.config(text=metadata['album'])
+    year_label.config(text=metadata['year'])
+    
+    current_song_length = metadata['length']
+    progress_bar.config(to=current_song_length)
+    
+    minutes = int(current_song_length // 60)
+    seconds = int(current_song_length % 60)
+    total_time_label.config(text=f"{minutes:02}:{seconds:02}")
+    
+    # Handle album art
+    if metadata['album_art']:
+        original_album_art_img = metadata['album_art'].copy()
     else:
-        pygame.mixer.music.unpause()
-        paused = False
+        original_album_art_img = placeholder_img.copy()
+        
+    # Update the UI and the Windows Media Session
+    update_ui()
+    if is_windows_media_session_supported:
+        update_media_session_metadata(metadata, original_album_art_img)
 
 def pause_music():
     """ Pauses the current music playback. """
     global paused
-    pygame.mixer.music.pause()
-    paused = True
+    if pygame.mixer.music.get_busy():
+        pygame.mixer.music.pause()
+        paused = True
+        if is_windows_media_session_supported:
+            media_manager.playback_info.playback_info.is_playing = False
 
 def skip_music():
     """ Skips to the next song in the playlist. """
     global current_song, paused, shuffling
-    try:
-        songlist.selection_clear(0, "end")
-        songlist.selection_set(songs.index(current_song) + 1)
-        current_song = songs[songlist.curselection()[0]]
-        play_music()
-    except:
-        if shuffling == False:
-            songlist.selection_clear(0, "end")
-            songlist.selection_set(0)
-            current_song = songs[songlist.curselection()[0]]
-            play_music()
-        else:
-            shuffle_music()
+    current_index = songs.index(current_song)
+    next_index = current_index + 1
+    
+    if next_index < len(songs):
+        current_song = songs[next_index]
+    else:
+        current_song = songs[0] # Loop back to the beginning
+    
+    play_music()
 
 def back_music():
     """ Skips to the previous song in the playlist. """
     global current_song, paused, shuffling
-    try:
-        songlist.selection_clear(0, "end")
-        songlist.selection_set(songs.index(current_song) - 1)
-        current_song = songs[songlist.curselection()[0]]
-        play_music()
-    except:
-        if shuffling == False:
-            songlist.selection_clear(0, "end")
-            songlist.selection_set("end")
-            current_song = songs[-1]
-            play_music()
-        else:
-            shuffle_music()
+    current_index = songs.index(current_song)
+    previous_index = current_index - 1
+    
+    if previous_index >= 0:
+        current_song = songs[previous_index]
+    else:
+        current_song = songs[-1] # Loop back to the end
+        
+    play_music()
 
 def shuffle_music():
     """ Shuffles the entire playlist and starts playback. """
     global songs, shuffling, current_song, dicts
     shuffling = True
     
-    # Shuffle the list of dictionaries
     dicts = shuffle(dicts)
     
-    # Update the listbox to reflect the new order
     songlist.delete(0, "end")
     songs.clear()
     for d in dicts:
         songs.append(d["key"])
         songlist.insert("end", d["display"])
 
-    current_song = songs[0]
-    songlist.selection_set(0)
-    play_music()
+    if songs:
+        current_song = songs[0]
+        songlist.selection_set(0)
+        play_music()
     
 def play_selected_music(event):
     """ Play the selected song from the listbox. """
@@ -401,62 +435,52 @@ def play_selected_music(event):
         current_song = songs[selected_index[0]]
         play_music()
 
-# The Menu widget now has its own background and foreground color
-menubar = Menu(root, bg="#1a0129", fg="#ffffff")
-root.config(menu=menubar, bg="#1a0129")
+# --- Placeholder Album Art Setup ---
+placeholder_img = Image.new('RGB', (300, 300), color='#1a0129')
+draw = ImageDraw.Draw(placeholder_img)
+draw.rectangle([10, 10, 290, 290], outline="#ffffff", width=2)
+try:
+    text_font = ImageFont.truetype("Arial", 80)
+except IOError:
+    text_font = ImageFont.load_default()
+text_to_draw = "🎶"
+bbox = draw.textbbox((0, 0), text_to_draw, font=text_font)
+text_x = (300 - (bbox[2] - bbox[0])) / 2
+text_y = (300 - (bbox[3] - bbox[1])) / 2
+draw.text((text_x, text_y), text_to_draw, fill="#ffffff", font=text_font)
+placeholder_album_art = ImageTk.PhotoImage(placeholder_img)
 
-# Create a central dictionary of font objects to manage them easily
-import tkinter.font as tkfont
+# --- GUI Components ---
 fonts = {
     'normal': tkfont.Font(family="Helvetica", size=10),
     'title': tkfont.Font(family="Helvetica", size=14, weight="bold"),
     'italic': tkfont.Font(family="Helvetica", size=10, slant="italic")
 }
 
-
-# The dropdown menu is now explicitly themed to match the app
-organize_menu = Menu(
-    menubar,
-    tearoff=False,
-    bg="#1a0129",
-    fg="#ffffff",
-    activebackground="#5A4286",
-    activeforeground="#ffffff",
-    font=fonts['normal']
-)
+menubar = Menu(root, bg="#1a0129", fg="#ffffff")
+root.config(menu=menubar, bg="#1a0129")
+organize_menu = Menu(menubar, tearoff=False, bg="#1a0129", fg="#ffffff", activebackground="#5A4286", activeforeground="#ffffff", font=fonts['normal'])
 organize_menu.add_command(label='Select Folder', command=open_folder_dialog)
 menubar.add_cascade(label="Add Songs", menu=organize_menu)
 
-# Set up the main grid for the application
 root.grid_rowconfigure(0, weight=1)
 root.grid_rowconfigure(1, weight=0)
 root.grid_columnconfigure(0, weight=1)
 
-# Create a frame for the playlist and place it in the top half
 playlist_frame = Frame(root, bg=root['bg'])
 playlist_frame.grid(row=0, column=0, sticky='nsew')
-# Configure the playlist frame to have two columns
-playlist_frame.grid_columnconfigure(0, weight=1) # Left column (playlist)
-playlist_frame.grid_columnconfigure(1, weight=1) # Right column (album art)
+playlist_frame.grid_columnconfigure(0, weight=1)
+playlist_frame.grid_columnconfigure(1, weight=1)
 playlist_frame.grid_rowconfigure(0, weight=1)
 
-# Updated Listbox with flat borders.
 songlist = Listbox(
-    playlist_frame,
-    bg="black",
-    fg="#ffffff",
-    relief=FLAT,
-    bd=0,
-    highlightthickness=2,
-    highlightbackground=border_color,
-    selectbackground=border_color,
-    selectforeground="#ffffff",
+    playlist_frame, bg="black", fg="#ffffff", relief=FLAT, bd=0, highlightthickness=2,
+    highlightbackground=border_color, selectbackground=border_color, selectforeground="#ffffff",
     font=fonts['normal']
 )
 songlist.grid(row=0, column=0, sticky='nsew', padx=10, pady=10)
 songlist.bind("<Double-Button-1>", play_selected_music)
 
-# Create a sub-frame for the album art and labels to align them correctly on the right
 album_art_frame = Frame(playlist_frame, bg=root['bg'])
 album_art_frame.grid(row=0, column=1, sticky='nsew')
 album_art_frame.grid_rowconfigure(0, weight=1)
@@ -469,22 +493,18 @@ album_art_frame.grid_columnconfigure(0, weight=1)
 album_art_label = Label(album_art_frame, bg="#1a0129", relief=FLAT)
 album_art_label.grid(row=0, column=0, sticky='nsew')
 
-# Song title label
 song_title_label = Label(album_art_frame, text="No song playing", bg="#1a0129", fg="#ffffff", font=fonts['title'])
 song_title_label.grid(row=1, column=0, pady=(0, 0))
 
-# Artist label
 artist_label = Label(album_art_frame, text="", bg="#1a0129", fg="#aaaaaa", font=fonts['normal'])
 artist_label.grid(row=2, column=0, pady=(0, 0))
 
-# New labels for album and year
 album_label = Label(album_art_frame, text="", bg="#1a0129", fg="#aaaaaa", font=fonts['italic'])
 album_label.grid(row=3, column=0, pady=(0, 0))
 
 year_label = Label(album_art_frame, text="", bg="#1a0129", fg="#aaaaaa", font=fonts['italic'])
 year_label.grid(row=4, column=0, pady=(0, 10), sticky='n')
 
-# Create a frame for all controls and place it in the bottom half
 controls_frame = Frame(root, bg=root['bg'])
 controls_frame.grid(row=1, column=0, sticky='nsew', pady=(5, 10))
 controls_frame.grid_rowconfigure(0, weight=1)
@@ -492,14 +512,7 @@ controls_frame.grid_rowconfigure(1, weight=1)
 controls_frame.grid_rowconfigure(2, weight=1)
 controls_frame.grid_columnconfigure(0, weight=1)
 
-
-# Updated control frame with flat borders, now inside controls_frame
-control_frame = Frame(
-    controls_frame,
-    bg=controls_frame['bg'],
-    relief=FLAT,
-    bd=0
-)
+control_frame = Frame(controls_frame, bg=controls_frame['bg'], relief=FLAT, bd=0)
 control_frame.grid(row=0, column=0, sticky='nsew')
 control_frame.grid_columnconfigure(0, weight=1)
 control_frame.grid_columnconfigure(1, weight=1)
@@ -507,154 +520,63 @@ control_frame.grid_columnconfigure(2, weight=1)
 control_frame.grid_columnconfigure(3, weight=1)
 control_frame.grid_columnconfigure(4, weight=1)
 
-# Use tk.PhotoImage to load images directly
+# Load images for buttons
 play_image = tk.PhotoImage(file="./icons/play.png")
 pause_image = tk.PhotoImage(file="./icons/pause.png")
 shuffle_image = tk.PhotoImage(file="./icons/shuffle.png")
 skip_image = tk.PhotoImage(file="./icons/skip.png")
 back_image = tk.PhotoImage(file="./icons/back.png")
 
+play_btn = Button(control_frame, image=play_image, bg="#1a0129", relief=RAISED, bd=2, highlightthickness=0, highlightbackground=border_color, highlightcolor=border_color, activebackground="#5A4286", command=play_music)
+shuffle_btn = Button(control_frame, image=shuffle_image, bg="#1a0129", relief=RAISED, bd=2, highlightthickness=0, highlightbackground=border_color, highlightcolor=border_color, activebackground="#5A4286", command=shuffle_music)
+skip_btn = Button(control_frame, image=skip_image, bg="#1a0129", relief=RAISED, bd=2, highlightthickness=0, highlightbackground=border_color, highlightcolor=border_color, activebackground="#5A4286", command=skip_music)
+back_btn = Button(control_frame, image=back_image, bg="#1a0129", relief=RAISED, bd=2, highlightthickness=0, highlightbackground=border_color, highlightcolor=border_color, activebackground="#5A4286", command=back_music)
+pause_btn = Button(control_frame, image=pause_image, bg="#1a0129", relief=RAISED, bd=2, highlightthickness=0, highlightbackground=border_color, highlightcolor=border_color, activebackground="#5A4286", command=pause_music)
 
-# Use initial sized images for button creation.
-# `activebackground` changes the color when the button is pressed.
-play_btn = Button(
-    control_frame,
-    image=play_image,
-    bg="#1a0129",
-    relief=RAISED,
-    bd=2,
-    highlightthickness=0,
-    highlightbackground=border_color,
-    highlightcolor=border_color,
-    activebackground="#5A4286",
-    command=play_music
-)
-shuffle_btn = Button(
-    control_frame,
-    image=shuffle_image,
-    bg="#1a0129",
-    relief=RAISED,
-    bd=2,
-    highlightthickness=0,
-    highlightbackground=border_color,
-    highlightcolor=border_color,
-    activebackground="#5A4286",
-    command=shuffle_music
-)
-skip_btn = Button(
-    control_frame,
-    image=skip_image,
-    bg="#1a0129",
-    relief=RAISED,
-    bd=2,
-    highlightthickness=0,
-    highlightbackground=border_color,
-    highlightcolor=border_color,
-    activebackground="#5A4286",
-    command=skip_music
-)
-back_btn = Button(
-    control_frame,
-    image=back_image,
-    bg="#1a0129",
-    relief=RAISED,
-    bd=2,
-    highlightthickness=0,
-    highlightbackground=border_color,
-    highlightcolor=border_color,
-    activebackground="#5A4286",
-    command=back_music
-)
-pause_btn = Button(
-    control_frame,
-    image=pause_image,
-    bg="#1a0129",
-    relief=RAISED,
-    bd=2,
-    highlightthickness=0,
-    highlightbackground=border_color,
-    highlightcolor=border_color,
-    activebackground="#5A4286",
-    command=pause_music
-)
-
-# Use a grid layout for the buttons
 play_btn.grid(row=0, column=0, padx=7, pady=2, sticky='nsew')
 pause_btn.grid(row=0, column=1, padx=7, pady=2, sticky='nsew')
 back_btn.grid(row=0, column=2, padx=7, pady=2, sticky='nsew')
 skip_btn.grid(row=0, column=3, padx=7, pady=2, sticky='nsew')
 shuffle_btn.grid(row=0, column=4, padx=7, pady=2, sticky='nsew')
 
-# New frame for all sliders and place it directly under the buttons
 slider_frame = Frame(controls_frame, bg=controls_frame['bg'])
 slider_frame.grid(row=1, column=0, sticky='nsew', pady=5)
-# Make the middle column expandable
 slider_frame.grid_columnconfigure(0, weight=0)
 slider_frame.grid_columnconfigure(1, weight=1)
 slider_frame.grid_columnconfigure(2, weight=0)
 
-# Progress bar with updated colors
 current_time_label = Label(slider_frame, text="00:00", bg=controls_frame['bg'], fg="#ffffff", font=fonts['normal'])
 current_time_label.grid(row=0, column=0, sticky='w')
 
 progress_bar = Scale(
-    slider_frame,
-    from_=0,
-    to=100,
-    orient=HORIZONTAL,
-    bg="#1a0129",
-    fg="#9F7AEA",
-    troughcolor="#5A4286",
-    sliderrelief=FLAT,
-    bd=0,
-    highlightthickness=0,
-    showvalue=False,
-    state=DISABLED
+    slider_frame, from_=0, to=100, orient=HORIZONTAL, bg="#1a0129", fg="#9F7AEA",
+    troughcolor="#5A4286", sliderrelief=FLAT, bd=0, highlightthickness=0, showvalue=False, state=DISABLED
 )
 progress_bar.grid(row=0, column=1, sticky='ew')
 
 total_time_label = Label(slider_frame, text="00:00", bg=controls_frame['bg'], fg="#ffffff", font=fonts['normal'])
 total_time_label.grid(row=0, column=2, sticky='e')
 
-# Label for volume slider
 volume_label = Label(slider_frame, text="Volume", bg=controls_frame['bg'], fg="#ffffff", font=fonts['normal'])
 volume_label.grid(row=1, column=1, sticky='ew')
 
-# Volume slider with updated colors
 volume_slider = Scale(
-    slider_frame,
-    from_=0,
-    to=100,
-    orient=HORIZONTAL,
-    bg="#1a0129",
-    fg="#9F7AEA",
-    troughcolor="#5A4286",
-    sliderrelief=FLAT,
-    bd=0,
-    highlightthickness=0,
-    command=set_volume
+    slider_frame, from_=0, to=100, orient=HORIZONTAL, bg="#1a0129", fg="#9F7AEA",
+    troughcolor="#5A4286", sliderrelief=FLAT, bd=0, highlightthickness=0, command=set_volume
 )
 volume_slider.set(50)
 volume_slider.grid(row=2, column=1, sticky='ew', pady=(10, 0))
 
-# Populate the list of widgets to update
 widgets_to_update = [
-    (songlist, 'normal'),
-    (song_title_label, 'title'),
-    (artist_label, 'normal'),
-    (album_label, 'italic'),
-    (year_label, 'italic'),
-    (current_time_label, 'normal'),
-    (total_time_label, 'normal'),
-    (volume_label, 'normal')
+    (songlist, 'normal'), (song_title_label, 'title'), (artist_label, 'normal'),
+    (album_label, 'italic'), (year_label, 'italic'), (current_time_label, 'normal'),
+    (total_time_label, 'normal'), (volume_label, 'normal')
 ]
-# We also need to re-configure the menu's font explicitly
 organize_menu.config(font=fonts['normal'])
 menubar.config(font=fonts['normal'])
 
-# Load the last folder's music on startup
-if os.path.exists(config_file_path):
-    with open(config_file_path, "r") as f:
+if os.path.exists(".last_dir.txt"):
+    with open(".last_dir.txt", "r") as f:
         last_dir = f.read().strip()
         if last_dir and os.path.isdir(last_dir):
             load_songs_from_path(last_dir)
@@ -663,8 +585,6 @@ if os.path.exists(config_file_path):
 
 check_music_end()
 update_song_progress()
-
-# The only thing left to do is to bind the font update to the mouse release event
 root.bind("<Configure>", on_resize_event)
 root.mainloop()
 
