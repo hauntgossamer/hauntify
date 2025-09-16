@@ -19,8 +19,6 @@ try:
     import winsdk.windows.media.playback as media_playback
     import winsdk.windows.media as windows_media
     from winsdk.windows.storage.streams import RandomAccessStreamReference
-    # We will need to use a thread for Windows API calls as they are async
-    # and to prevent blocking the main GUI thread.
     is_windows_media_session_supported = True
 except ImportError:
     is_windows_media_session_supported = False
@@ -68,37 +66,32 @@ if is_windows_media_session_supported:
     def update_media_session_metadata(metadata_dict, album_art_image=None):
         """
         Updates the song metadata and album art for the Windows Media Session.
-        This must be run on a separate thread to avoid blocking the GUI.
         """
         if not is_windows_media_session_supported:
             return
 
-        def run_update():
-            media_properties = media_manager.playback_info.playback_info.display_properties
-            media_properties.title = metadata_dict.get('title', "Unknown Title")
-            media_properties.artist = metadata_dict.get('artist', "Unknown Artist")
-            media_properties.album_title = metadata_dict.get('album', "Unknown Album")
-            media_properties.type = windows_media.MediaPlaybackType.MUSIC
-            
-            # Update album art
-            if album_art_image:
-                try:
-                    bio = BytesIO()
-                    # The format needs to be PNG for the Windows API
-                    album_art_image.save(bio, format='PNG')
-                    bio.seek(0)
-                    media_properties.thumbnail = RandomAccessStreamReference.create_from_stream(bio)
-                except Exception as e:
-                    print(f"Failed to update album art for media session: {e}")
-            else:
-                media_properties.thumbnail = None
-
-            # Finalize the update
-            media_manager.playback_info.playback_info.display_properties = media_properties
-            media_manager.playback_info.playback_info.is_playing = pygame.mixer.music.get_busy()
+        media_properties = media_manager.playback_info.playback_info.display_properties
+        media_properties.title = metadata_dict.get('title', "Unknown Title")
+        media_properties.artist = metadata_dict.get('artist', "Unknown Artist")
+        media_properties.album_title = metadata_dict.get('album', "Unknown Album")
+        media_properties.type = windows_media.MediaPlaybackType.MUSIC
         
-        # Start the update in a new thread
-        threading.Thread(target=run_update).start()
+        # Update album art
+        if album_art_image:
+            try:
+                bio = BytesIO()
+                # The format needs to be PNG for the Windows API
+                album_art_image.save(bio, format='PNG')
+                bio.seek(0)
+                media_properties.thumbnail = RandomAccessStreamReference.create_from_stream(bio)
+            except Exception as e:
+                print(f"Failed to update album art for media session: {e}")
+        else:
+            media_properties.thumbnail = None
+
+        # Finalize the update
+        media_manager.playback_info.playback_info.display_properties = media_properties
+        media_manager.playback_info.playback_info.is_playing = pygame.mixer.music.get_busy()
     
     # Define command handlers for lock screen controls
     def on_play_command(sender, args):
@@ -118,7 +111,7 @@ if is_windows_media_session_supported:
         root.after(0, back_music)
     
     # Initialize the media session on a separate thread to prevent blocking
-    threading.Thread(target=setup_media_session).start()
+    setup_media_session()
 
 # --- Utility Functions ---
 def set_volume(val):
@@ -323,6 +316,7 @@ def play_music():
         pygame.mixer.music.unpause()
         paused = False
         if is_windows_media_session_supported:
+            update_media_session_metadata(get_metadata(next(i for i in dicts if i["key"] == current_song)["value"]), original_album_art_img)
             media_manager.playback_info.playback_info.is_playing = True
         return
         
@@ -373,6 +367,7 @@ def play_music():
     update_ui()
     if is_windows_media_session_supported:
         update_media_session_metadata(metadata, original_album_art_img)
+        media_manager.playback_info.playback_info.is_playing = True
 
 def pause_music():
     """ Pauses the current music playback. """
