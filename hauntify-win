@@ -12,19 +12,6 @@ from mutagen.oggvorbis import OggVorbis
 from PIL import Image, ImageTk, ImageDraw, ImageFont, ImageColor
 import threading
 
-# The 'ctypes' and 'win32con' libraries are now used to send media key events
-# directly to the Windows operating system. This is what allows for control
-# from the Windows lock screen and when the application is not focused.
-# You must install the pywin32 library:
-# pip install pywin32
-import ctypes
-import win32con
-
-# Windows API constants for media keys
-VK_MEDIA_PLAY_PAUSE = 0xB3
-VK_MEDIA_NEXT_TRACK = 0xB0
-VK_MEDIA_PREV_TRACK = 0xB1
-
 # Define a custom border color to use throughout the app
 border_color = '#111144'
 # Global variable to hold the resize job ID for debouncing
@@ -414,13 +401,6 @@ def play_selected_music(event):
         current_song = songs[selected_index[0]]
         play_music()
 
-def send_media_key_event(key_code):
-    """ Sends a virtual media key press to the system. """
-    # This simulates a key down and key up event
-    ctypes.windll.user32.keybd_event(key_code, 0, 0, 0)
-    sleep(0.05)
-    ctypes.windll.user32.keybd_event(key_code, 0, win32con.KEYEVENTF_KEYUP, 0)
-
 # The Menu widget now has its own background and foreground color
 menubar = Menu(root, bg="#1a0129", fg="#ffffff")
 root.config(menu=menubar, bg="#1a0129")
@@ -547,7 +527,7 @@ play_btn = Button(
     highlightbackground=border_color,
     highlightcolor=border_color,
     activebackground="#5A4286",
-    command=lambda: send_media_key_event(VK_MEDIA_PLAY_PAUSE)
+    command=play_music
 )
 shuffle_btn = Button(
     control_frame,
@@ -571,7 +551,7 @@ skip_btn = Button(
     highlightbackground=border_color,
     highlightcolor=border_color,
     activebackground="#5A4286",
-    command=lambda: send_media_key_event(VK_MEDIA_NEXT_TRACK)
+    command=skip_music
 )
 back_btn = Button(
     control_frame,
@@ -583,7 +563,7 @@ back_btn = Button(
     highlightbackground=border_color,
     highlightcolor=border_color,
     activebackground="#5A4286",
-    command=lambda: send_media_key_event(VK_MEDIA_PREV_TRACK)
+    command=back_music
 )
 pause_btn = Button(
     control_frame,
@@ -595,7 +575,7 @@ pause_btn = Button(
     highlightbackground=border_color,
     highlightcolor=border_color,
     activebackground="#5A4286",
-    command=lambda: send_media_key_event(VK_MEDIA_PLAY_PAUSE)
+    command=pause_music
 )
 
 # Use a grid layout for the buttons
